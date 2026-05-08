@@ -87,7 +87,7 @@ function ClockWidget({ accent, fonts }: { accent:string; fonts:typeof FONTS[stri
 // ── Weather ────────────────────────────────────────────────────────
 function WeatherWidget({ city, fonts }: { city:string; fonts:typeof FONTS[string] }) {
   const key = `/api/weather?city=${encodeURIComponent(city||'Woodstock, GA')}`
-  const { data, mutate } = useSWR(key, fetcher, { refreshInterval:900_000, revalidateOnMount:true })
+  const { data } = useSWR(key, fetcher, { refreshInterval:900_000, revalidateOnMount:true, revalidateIfStale:true, dedupingInterval:0 })
   const w = data||{}
   if (!data) return (
     <div className="card noise h-full" style={{padding:'1.2vw',display:'flex',flexDirection:'column',gap:'0.8vw'}}>
@@ -250,7 +250,6 @@ function SummaryWidget({ fonts }: { fonts:typeof FONTS[string] }) {
 function NewsWidget({ scrollSpeed, fontSize, fonts }: { scrollSpeed:number; fontSize:number; fonts:typeof FONTS[string] }) {
   const { data } = useSWR('/api/news', fetcher, { refreshInterval:600_000 })
   const articles:Record<string,string>[] = data?.articles||[]
-  const outerRef = useRef<HTMLDivElement>(null)
   const innerRef = useRef<HTMLDivElement>(null)
   const rafRef   = useRef<number>(0)
   const posRef   = useRef(0)
@@ -260,30 +259,32 @@ function NewsWidget({ scrollSpeed, fontSize, fonts }: { scrollSpeed:number; font
 
   const timeAgo=(iso:string)=>{ if(!iso)return''; const d=Date.now()-new Date(iso).getTime(),m=Math.floor(d/60000); return m<60?`${m}m`:m<1440?`${Math.floor(m/60)}h`:`${Math.floor(m/1440)}d` }
 
-  // Scroll engine: starts after articles load and DOM paints
+  // Use transform:translateY — works with overflow:hidden, no scrollTop needed
   useEffect(() => {
     if (articles.length === 0) return
     cancelAnimationFrame(rafRef.current)
     posRef.current = 0
 
-    // Wait for DOM to fully paint article list
     const init = setTimeout(() => {
-      const outer = outerRef.current
       const inner = innerRef.current
-      if (!outer || !inner) return
+      if (!inner) return
+      const parent = inner.parentElement
+      if (!parent) return
 
       const tick = () => {
-        const totalH = inner.scrollHeight
-        const viewH  = outer.clientHeight
-        if (totalH > viewH && !pauseRef.current) {
-          posRef.current += totalH / (speedRef.current * 60)
-          if (posRef.current >= totalH) posRef.current = 0
-          outer.scrollTop = posRef.current
+        if (!pauseRef.current) {
+          const totalH = inner.offsetHeight
+          const viewH  = parent.offsetHeight
+          if (totalH > viewH) {
+            posRef.current += totalH / (speedRef.current * 60)
+            if (posRef.current >= totalH) posRef.current = 0
+            inner.style.transform = `translateY(-${posRef.current}px)`
+          }
         }
         rafRef.current = requestAnimationFrame(tick)
       }
       rafRef.current = requestAnimationFrame(tick)
-    }, 800)
+    }, 1000)
 
     return () => { clearTimeout(init); cancelAnimationFrame(rafRef.current) }
   }, [articles.length])
@@ -294,10 +295,10 @@ function NewsWidget({ scrollSpeed, fontSize, fonts }: { scrollSpeed:number; font
         <span className="widget-label">News Feed</span>
         <div className="live-dot"/>
       </div>
-      <div ref={outerRef} style={{flex:1,overflow:'hidden',position:'relative'}}
+      <div style={{flex:1,overflow:'hidden',position:'relative'}}
         onMouseEnter={()=>pauseRef.current=true}
         onMouseLeave={()=>pauseRef.current=false}>
-        <div ref={innerRef}>
+        <div ref={innerRef} style={{willChange:'transform'}}>
           {!data?[85,70,90,75,80].map((w,i)=><div key={i} className="shimmer rounded mb-1" style={{width:`${w}%`,height:'clamp(28px,3.5vh,40px)',opacity:0.3}}/>):
             articles.slice(0,20).map((a,i)=>(
               <a key={i} href={a.link} target="_blank" rel="noopener noreferrer" style={{textDecoration:'none',padding:'0.4vw 0.45vw',borderRadius:'0.4vw',display:'block',marginBottom:'0.15vw'}}
@@ -576,11 +577,11 @@ export default function Dashboard() {
   const { mutate } = useSWRConfig()
   useEffect(()=>setMounted(true),[])
 
-  // When city changes, bust the weather cache immediately
+  // When city changes, bust weather cache and force immediate refetch
   useEffect(()=>{
     if (!mounted) return
     const key = `/api/weather?city=${encodeURIComponent(settings.city||'Woodstock, GA')}`
-    mutate(key)
+    mutate(key, undefined, { revalidate: true })
   },[settings.city, mounted, mutate])
   if(!mounted)return <div style={{background:'#080C12',width:'100vw',height:'100vh'}}/>
 
