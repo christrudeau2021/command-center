@@ -6,9 +6,39 @@
   "installCommand": "npm install",
   "headers": [
     {
-      "source": "/api/(.*)",
+      "source": "/api/weather",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store, no-cache, must-revalidate" }
+      ]
+    },
+    {
+      "source": "/api/news",
       "headers": [
         { "key": "Cache-Control", "value": "s-maxage=300, stale-while-revalidate=600" }
+      ]
+    },
+    {
+      "source": "/api/stocks",
+      "headers": [
+        { "key": "Cache-Control", "value": "s-maxage=120, stale-while-revalidate=300" }
+      ]
+    },
+    {
+      "source": "/api/sports",
+      "headers": [
+        { "key": "Cache-Control", "value": "s-maxage=60, stale-while-revalidate=120" }
+      ]
+    },
+    {
+      "source": "/api/calendar",
+      "headers": [
+        { "key": "Cache-Control", "value": "s-maxage=300, stale-while-revalidate=600" }
+      ]
+    },
+    {
+      "source": "/api/summary",
+      "headers": [
+        { "key": "Cache-Control", "value": "s-maxage=3600, stale-while-revalidate=7200" }
       ]
     }
   ]
