@@ -1,6 +1,6 @@
 'use client'
-import { useState, useEffect, useRef, useCallback } from 'react'
-import useSWR from 'swr'
+import { useState, useEffect, useRef } from 'react'
+import useSWR, { useSWRConfig } from 'swr'
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
@@ -86,8 +86,8 @@ function ClockWidget({ accent, fonts }: { accent:string; fonts:typeof FONTS[stri
 
 // ── Weather ────────────────────────────────────────────────────────
 function WeatherWidget({ city, fonts }: { city:string; fonts:typeof FONTS[string] }) {
-  const key = city ? `/api/weather?city=${encodeURIComponent(city)}` : '/api/weather'
-  const { data } = useSWR(key, fetcher, { refreshInterval:900_000 })
+  const key = `/api/weather?city=${encodeURIComponent(city||'Woodstock, GA')}`
+  const { data, mutate } = useSWR(key, fetcher, { refreshInterval:900_000, revalidateOnMount:true })
   const w = data||{}
   if (!data) return (
     <div className="card noise h-full" style={{padding:'1.2vw',display:'flex',flexDirection:'column',gap:'0.8vw'}}>
@@ -260,33 +260,33 @@ function NewsWidget({ scrollSpeed, fontSize, fonts }: { scrollSpeed:number; font
 
   const timeAgo=(iso:string)=>{ if(!iso)return''; const d=Date.now()-new Date(iso).getTime(),m=Math.floor(d/60000); return m<60?`${m}m`:m<1440?`${Math.floor(m/60)}h`:`${Math.floor(m/1440)}d` }
 
-  const startScroll = useCallback(() => {
-    cancelAnimationFrame(rafRef.current)
-    const outer = outerRef.current
-    const inner = innerRef.current
-    if (!outer || !inner) return
-    const totalH = inner.scrollHeight
-    const viewH  = outer.clientHeight
-    if (totalH <= viewH) return
-
-    const tick = () => {
-      if (!pauseRef.current) {
-        // px per frame at 60fps: totalH / (speed * 60)
-        posRef.current += totalH / (speedRef.current * 60)
-        if (posRef.current >= totalH) posRef.current = 0
-        outer.scrollTop = posRef.current
-      }
-      rafRef.current = requestAnimationFrame(tick)
-    }
-    rafRef.current = requestAnimationFrame(tick)
-  }, [])
-
+  // Scroll engine: starts after articles load and DOM paints
   useEffect(() => {
     if (articles.length === 0) return
-    // Small delay to let DOM paint
-    const t = setTimeout(startScroll, 300)
-    return () => { clearTimeout(t); cancelAnimationFrame(rafRef.current) }
-  }, [articles, startScroll])
+    cancelAnimationFrame(rafRef.current)
+    posRef.current = 0
+
+    // Wait for DOM to fully paint article list
+    const init = setTimeout(() => {
+      const outer = outerRef.current
+      const inner = innerRef.current
+      if (!outer || !inner) return
+
+      const tick = () => {
+        const totalH = inner.scrollHeight
+        const viewH  = outer.clientHeight
+        if (totalH > viewH && !pauseRef.current) {
+          posRef.current += totalH / (speedRef.current * 60)
+          if (posRef.current >= totalH) posRef.current = 0
+          outer.scrollTop = posRef.current
+        }
+        rafRef.current = requestAnimationFrame(tick)
+      }
+      rafRef.current = requestAnimationFrame(tick)
+    }, 800)
+
+    return () => { clearTimeout(init); cancelAnimationFrame(rafRef.current) }
+  }, [articles.length])
 
   return (
     <div className="card noise h-full" style={{padding:'1.2vw',display:'flex',flexDirection:'column',gap:'0.5vw',boxShadow:'0 0 2vw rgba(139,92,246,0.07)'}}>
@@ -573,7 +573,15 @@ export default function Dashboard() {
   const [showSettings,setShowSettings]=useState(false)
   const [settings,setSettings]=useSettings()
   const [preview,setPreview]=useState<Settings|null>(null)
+  const { mutate } = useSWRConfig()
   useEffect(()=>setMounted(true),[])
+
+  // When city changes, bust the weather cache immediately
+  useEffect(()=>{
+    if (!mounted) return
+    const key = `/api/weather?city=${encodeURIComponent(settings.city||'Woodstock, GA')}`
+    mutate(key)
+  },[settings.city, mounted, mutate])
   if(!mounted)return <div style={{background:'#080C12',width:'100vw',height:'100vh'}}/>
 
   const active = preview||settings
