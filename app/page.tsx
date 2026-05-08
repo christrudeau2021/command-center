@@ -45,7 +45,9 @@ const FONTS: Record<string,{display:string;body:string;mono:string}> = {
 // ── Clock ──────────────────────────────────────────────────────────
 function ClockWidget({ accent, fonts }: { accent:string; fonts:typeof FONTS[string] }) {
   const [t, setT] = useState({h:'12',m:'00',s:'00',ap:'AM',day:'',date:''})
-  const ref = useRef<HTMLSpanElement>(null)
+  const cardRef = useRef<HTMLDivElement>(null)
+  const timeRef = useRef<HTMLSpanElement>(null)
+
   useEffect(() => {
     const u = () => {
       const n=new Date(),h=n.getHours(),m=n.getMinutes(),s=n.getSeconds()
@@ -56,20 +58,33 @@ function ClockWidget({ accent, fonts }: { accent:string; fonts:typeof FONTS[stri
     u(); const i=setInterval(u,1000); return()=>clearInterval(i)
   }, [])
 
-  // Auto-shrink font to fit card width
+  // Fit font to card — runs on mount and whenever card resizes (handles Safari, TV, resize)
   useEffect(() => {
-    const el = ref.current; if (!el) return
-    el.style.fontSize = '10vw'
-    while (el.scrollWidth > el.parentElement!.clientWidth - 32 && parseFloat(el.style.fontSize) > 1) {
-      el.style.fontSize = (parseFloat(el.style.fontSize) - 0.2) + 'vw'
+    const fit = () => {
+      const card = cardRef.current
+      const span = timeRef.current
+      if (!card || !span) return
+      const maxW = card.clientWidth - 48  // leave padding room
+      if (maxW <= 0) return
+      let size = 14  // start large in vw
+      span.style.fontSize = size + 'vw'
+      // Shrink until it fits
+      while (span.scrollWidth > maxW && size > 2) {
+        size -= 0.3
+        span.style.fontSize = size + 'vw'
+      }
     }
-  }, [t.h, t.m])
+    fit()
+    const ro = new ResizeObserver(fit)
+    if (cardRef.current) ro.observe(cardRef.current)
+    return () => ro.disconnect()
+  }, [])
 
   return (
-    <div className="card noise h-full" style={{display:'flex',flexDirection:'column',justifyContent:'space-between',padding:'1.2vw',boxShadow:`0 0 2vw ${accent}22`,overflow:'hidden'}}>
+    <div ref={cardRef} className="card noise h-full" style={{display:'flex',flexDirection:'column',justifyContent:'space-between',padding:'1.2vw',boxShadow:`0 0 2vw ${accent}22`,overflow:'hidden'}}>
       <span className="widget-label">Local Time</span>
       <div style={{display:'flex',alignItems:'flex-end',gap:'0.3vw',overflow:'hidden',minWidth:0}}>
-        <span ref={ref} style={{fontFamily:fonts.display,fontWeight:800,color:'#F0F4F8',letterSpacing:'-0.04em',lineHeight:1,whiteSpace:'nowrap',display:'block'}}>{t.h}:{t.m}</span>
+        <span ref={timeRef} style={{fontFamily:fonts.display,fontWeight:800,color:'#F0F4F8',letterSpacing:'-0.04em',lineHeight:1,whiteSpace:'nowrap',display:'block',flexShrink:1,minWidth:0}}>{t.h}:{t.m}</span>
         <div style={{display:'flex',flexDirection:'column',marginBottom:'0.6vw',gap:3,flexShrink:0}}>
           <span style={{fontFamily:fonts.mono,fontSize:'clamp(8px,0.85vw,12px)',color:accent,letterSpacing:'.1em'}}>{t.ap}</span>
           <span style={{fontFamily:fonts.mono,fontSize:'clamp(7px,0.75vw,10px)',color:'#4A5568'}}>:{t.s}</span>
@@ -276,35 +291,47 @@ function NewsWidget({ scrollSpeed, fontSize, fonts }: { scrollSpeed:number; font
 
   useEffect(() => {
     cancelAnimationFrame(rafRef.current)
+    posRef.current = 0
     if (articles.length === 0) return
 
-    // Wait two frames for DOM to measure
-    let frame = 0
-    const start = () => {
-      frame++
+    // Use interval-based polling until DOM has real height, then switch to RAF
+    let attempts = 0
+    const tryStart = () => {
+      attempts++
       const wrap  = wrapRef.current
       const track = trackRef.current
-      if (!wrap || !track) { rafRef.current = requestAnimationFrame(start); return }
-      // getBoundingClientRect gives real pixel height even inside flex containers
-      const viewH  = wrap.getBoundingClientRect().height
-      const trackH = track.getBoundingClientRect().height
-      if (trackH === 0 || viewH === 0) { if (frame < 120) { rafRef.current = requestAnimationFrame(start) }; return }
-      if (trackH <= viewH) return // content fits, no scroll needed
+      if (!wrap || !track) return
 
-      posRef.current = 0
+      const viewH  = wrap.getBoundingClientRect().height
+      // track contains doubled list — measure the first half height instead
+      const firstChild = track.firstElementChild as HTMLElement|null
+      // fallback: use track height / 2 if children not available
+      const singleH = firstChild
+        ? track.getBoundingClientRect().height / 2
+        : track.getBoundingClientRect().height / 2
+
+      if (singleH < 10 || viewH < 10) {
+        // Not ready yet — retry up to 3 seconds
+        if (attempts < 30) setTimeout(tryStart, 100)
+        return
+      }
+
+      if (singleH <= viewH) return // content fits, no scrolling needed
+
       const tick = () => {
         if (!pauseRef.current) {
-          posRef.current += trackH / (speedRef.current * 60)
-          // Seamless loop: when we've scrolled one full set, reset
-          if (posRef.current >= trackH / 2) posRef.current = 0
-          track.style.transform = `translateY(-${posRef.current}px)`
+          posRef.current += singleH / (speedRef.current * 60)
+          if (posRef.current >= singleH) posRef.current = 0
+          if (track) track.style.transform = `translateY(-${posRef.current}px)`
         }
         rafRef.current = requestAnimationFrame(tick)
       }
       rafRef.current = requestAnimationFrame(tick)
     }
-    rafRef.current = requestAnimationFrame(start)
-    return () => cancelAnimationFrame(rafRef.current)
+
+    // First attempt after 500ms — gives React time to flush DOM
+    const t = setTimeout(tryStart, 500)
+    return () => { clearTimeout(t); cancelAnimationFrame(rafRef.current) }
   }, [articles.length, scrollSpeed])
 
   // Render articles twice so loop is seamless
