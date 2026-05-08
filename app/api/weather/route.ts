@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+export const dynamic = 'force-dynamic'
 
 const WMO: Record<number,{label:string;icon:string}> = {
   0:{label:'Clear',icon:'☀️'},1:{label:'Mostly Clear',icon:'🌤️'},2:{label:'Partly Cloudy',icon:'⛅'},
@@ -34,7 +35,7 @@ export async function GET(req: Request) {
     }
 
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,relative_humidity_2m&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=America/New_York&forecast_days=5`
-    const res = await fetch(url, { next: { revalidate: 900 } })
+    const res = await fetch(url, { cache: 'no-store' })
     const data = await res.json()
     const cur = data.current
     const wmo = WMO[cur.weather_code] || {label:'Unknown',icon:'🌡️'}
