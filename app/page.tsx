@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
-import useSWR, { useSWRConfig } from 'swr'
+import useSWR from 'swr'
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
@@ -87,7 +87,7 @@ function ClockWidget({ accent, fonts }: { accent:string; fonts:typeof FONTS[stri
 // ── Weather ────────────────────────────────────────────────────────
 function WeatherWidget({ city, fonts }: { city:string; fonts:typeof FONTS[string] }) {
   const key = `/api/weather?city=${encodeURIComponent(city||'Woodstock, GA')}`
-  const { data } = useSWR(key, fetcher, { refreshInterval:900_000, revalidateOnMount:true, revalidateIfStale:true, dedupingInterval:0 })
+  const { data } = useSWR(key, fetcher, { refreshInterval:900_000, dedupingInterval:0, keepPreviousData:false })
   const w = data||{}
   if (!data) return (
     <div className="card noise h-full" style={{padding:'1.2vw',display:'flex',flexDirection:'column',gap:'0.8vw'}}>
@@ -247,47 +247,68 @@ function SummaryWidget({ fonts }: { fonts:typeof FONTS[string] }) {
 }
 
 // ── News — smooth auto-scroll ──────────────────────────────────────
+function NewsItem({ article, fontSize, fonts }: { article:Record<string,string>; fontSize:number; fonts:typeof FONTS[string] }) {
+  const timeAgo=(iso:string)=>{ if(!iso)return''; const d=Date.now()-new Date(iso).getTime(),m=Math.floor(d/60000); return m<60?`${m}m`:m<1440?`${Math.floor(m/60)}h`:`${Math.floor(m/1440)}d` }
+  return (
+    <a href={article.link} target="_blank" rel="noopener noreferrer"
+      style={{textDecoration:'none',padding:'0.4vw 0.45vw',borderRadius:'0.4vw',display:'block',marginBottom:'0.15vw'}}
+      onMouseEnter={e=>(e.currentTarget.style.background='rgba(255,255,255,0.05)')}
+      onMouseLeave={e=>(e.currentTarget.style.background='transparent')}>
+      <div style={{fontFamily:fonts.body,fontSize,color:'#D1D9E0',fontWeight:500,lineHeight:1.4}}>{article.title}</div>
+      <div style={{display:'flex',gap:6,marginTop:2}}>
+        <span style={{fontFamily:fonts.mono,fontSize:'clamp(7px,0.72vw,10px)',color:'#8B5CF6'}}>{article.source?.split(' ')[0]}</span>
+        <span style={{fontFamily:fonts.mono,fontSize:'clamp(7px,0.72vw,10px)',color:'#4A5568'}}>· {timeAgo(article.pubDate)} ago</span>
+      </div>
+    </a>
+  )
+}
+
 function NewsWidget({ scrollSpeed, fontSize, fonts }: { scrollSpeed:number; fontSize:number; fonts:typeof FONTS[string] }) {
   const { data } = useSWR('/api/news', fetcher, { refreshInterval:600_000 })
   const articles:Record<string,string>[] = data?.articles||[]
-  const innerRef = useRef<HTMLDivElement>(null)
+  const wrapRef  = useRef<HTMLDivElement>(null)
+  const trackRef = useRef<HTMLDivElement>(null)
   const rafRef   = useRef<number>(0)
   const posRef   = useRef(0)
   const pauseRef = useRef(false)
   const speedRef = useRef(scrollSpeed)
   speedRef.current = scrollSpeed
 
-  const timeAgo=(iso:string)=>{ if(!iso)return''; const d=Date.now()-new Date(iso).getTime(),m=Math.floor(d/60000); return m<60?`${m}m`:m<1440?`${Math.floor(m/60)}h`:`${Math.floor(m/1440)}d` }
-
-  // Use transform:translateY — works with overflow:hidden, no scrollTop needed
   useEffect(() => {
-    if (articles.length === 0) return
     cancelAnimationFrame(rafRef.current)
-    posRef.current = 0
+    if (articles.length === 0) return
 
-    const init = setTimeout(() => {
-      const inner = innerRef.current
-      if (!inner) return
-      const parent = inner.parentElement
-      if (!parent) return
+    // Wait two frames for DOM to measure
+    let frame = 0
+    const start = () => {
+      frame++
+      const wrap  = wrapRef.current
+      const track = trackRef.current
+      if (!wrap || !track) { rafRef.current = requestAnimationFrame(start); return }
+      // getBoundingClientRect gives real pixel height even inside flex containers
+      const viewH  = wrap.getBoundingClientRect().height
+      const trackH = track.getBoundingClientRect().height
+      if (trackH === 0 || viewH === 0) { if (frame < 120) { rafRef.current = requestAnimationFrame(start) }; return }
+      if (trackH <= viewH) return // content fits, no scroll needed
 
+      posRef.current = 0
       const tick = () => {
         if (!pauseRef.current) {
-          const totalH = inner.offsetHeight
-          const viewH  = parent.offsetHeight
-          if (totalH > viewH) {
-            posRef.current += totalH / (speedRef.current * 60)
-            if (posRef.current >= totalH) posRef.current = 0
-            inner.style.transform = `translateY(-${posRef.current}px)`
-          }
+          posRef.current += trackH / (speedRef.current * 60)
+          // Seamless loop: when we've scrolled one full set, reset
+          if (posRef.current >= trackH / 2) posRef.current = 0
+          track.style.transform = `translateY(-${posRef.current}px)`
         }
         rafRef.current = requestAnimationFrame(tick)
       }
       rafRef.current = requestAnimationFrame(tick)
-    }, 1000)
+    }
+    rafRef.current = requestAnimationFrame(start)
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [articles.length, scrollSpeed])
 
-    return () => { clearTimeout(init); cancelAnimationFrame(rafRef.current) }
-  }, [articles.length])
+  // Render articles twice so loop is seamless
+  const list = articles.slice(0, 20)
 
   return (
     <div className="card noise h-full" style={{padding:'1.2vw',display:'flex',flexDirection:'column',gap:'0.5vw',boxShadow:'0 0 2vw rgba(139,92,246,0.07)'}}>
@@ -295,22 +316,16 @@ function NewsWidget({ scrollSpeed, fontSize, fonts }: { scrollSpeed:number; font
         <span className="widget-label">News Feed</span>
         <div className="live-dot"/>
       </div>
-      <div style={{flex:1,overflow:'hidden',position:'relative'}}
+      <div ref={wrapRef} style={{flex:1,overflow:'hidden',position:'relative'}}
         onMouseEnter={()=>pauseRef.current=true}
         onMouseLeave={()=>pauseRef.current=false}>
-        <div ref={innerRef} style={{willChange:'transform'}}>
-          {!data?[85,70,90,75,80].map((w,i)=><div key={i} className="shimmer rounded mb-1" style={{width:`${w}%`,height:'clamp(28px,3.5vh,40px)',opacity:0.3}}/>):
-            articles.slice(0,20).map((a,i)=>(
-              <a key={i} href={a.link} target="_blank" rel="noopener noreferrer" style={{textDecoration:'none',padding:'0.4vw 0.45vw',borderRadius:'0.4vw',display:'block',marginBottom:'0.15vw'}}
-                onMouseEnter={e=>(e.currentTarget.style.background='rgba(255,255,255,0.05)')}
-                onMouseLeave={e=>(e.currentTarget.style.background='transparent')}>
-                <div style={{fontFamily:fonts.body,fontSize,color:'#D1D9E0',fontWeight:500,lineHeight:1.4}}>{a.title}</div>
-                <div style={{display:'flex',gap:6,marginTop:2}}>
-                  <span style={{fontFamily:fonts.mono,fontSize:'clamp(7px,0.72vw,10px)',color:'#8B5CF6'}}>{a.source?.split(' ')[0]}</span>
-                  <span style={{fontFamily:fonts.mono,fontSize:'clamp(7px,0.72vw,10px)',color:'#4A5568'}}>· {timeAgo(a.pubDate)} ago</span>
-                </div>
-              </a>
-            ))
+        <div ref={trackRef} style={{willChange:'transform'}}>
+          {!data
+            ? [85,70,90,75,80].map((w,i)=><div key={i} className="shimmer rounded mb-1" style={{width:`${w}%`,height:'clamp(28px,3.5vh,40px)',opacity:0.3}}/>)
+            : <>
+                {list.map((a,i)=><NewsItem key={i} article={a} fontSize={fontSize} fonts={fonts}/>)}
+                {list.map((a,i)=><NewsItem key={`d${i}`} article={a} fontSize={fontSize} fonts={fonts}/>)}
+              </>
           }
         </div>
       </div>
@@ -574,15 +589,7 @@ export default function Dashboard() {
   const [showSettings,setShowSettings]=useState(false)
   const [settings,setSettings]=useSettings()
   const [preview,setPreview]=useState<Settings|null>(null)
-  const { mutate } = useSWRConfig()
   useEffect(()=>setMounted(true),[])
-
-  // When city changes, bust weather cache and force immediate refetch
-  useEffect(()=>{
-    if (!mounted) return
-    const key = `/api/weather?city=${encodeURIComponent(settings.city||'Woodstock, GA')}`
-    mutate(key, undefined, { revalidate: true })
-  },[settings.city, mounted, mutate])
   if(!mounted)return <div style={{background:'#080C12',width:'100vw',height:'100vh'}}/>
 
   const active = preview||settings
